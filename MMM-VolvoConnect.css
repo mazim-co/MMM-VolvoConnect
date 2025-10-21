@@ -1,0 +1,13 @@
+.volvo-connect {
+  color: #fff;
+  font-family: inherit;
+}
+.volvo-connect .title {
+  font-weight: 700;
+  margin-bottom: 6px;
+  opacity: .9;
+}
+.volvo-connect .status {
+  opacity: .7;
+  font-size: 12px;
+}
