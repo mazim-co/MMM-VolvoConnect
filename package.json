@@ -1,0 +1,17 @@
+{
+  "name": "MMM-VolvoConnect",
+  "version": "1.0.0",
+  "description": "MagicMirror² module for Volvo Connected Vehicle data (OAuth PKCE + live map).",
+  "main": "MMM-VolvoConnect.js",
+  "author": "Manuel Zimmermann",
+  "license": "MIT",
+  "type": "commonjs",
+  "dependencies": {
+    "axios": "^1.7.4",
+    "express": "^4.19.2",
+    "open": "^10.1.0"
+  },
+  "scripts": {
+    "auth": "node node_helper.js --auth-only"
+  }
+}
