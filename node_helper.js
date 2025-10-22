@@ -49,10 +49,13 @@ module.exports = NodeHelper.create({
       this._ensureAuthServer();
 
       if (this.tokens?.access_token) {
-        this.sendSocketNotification("MYVOLVO_STATUS", { message: "Authenticated" });
-      } else {
-        this._beginLogin();
-      }
+  this.sendSocketNotification("MYVOLVO_STATUS", { message: "Authenticated" });
+  this._fetchVIN()
+    .then(() => this._schedulePoll(true))
+    .catch(() => this.sendSocketNotification("MYVOLVO_STATUS", { message: "VIN fetch failed" }));
+} else {
+  this._beginLogin();
+}
     }
   },
 
@@ -131,10 +134,6 @@ module.exports = NodeHelper.create({
       throw new Error("Missing PKCE verifier (start auth again).");
     }
     
-
-
-    
-
     const basic = Buffer.from(`${this.cfg.clientId}:${this.cfg.clientSecret}`).toString("base64");
     const body = new URLSearchParams({
       grant_type: "authorization_code",
@@ -155,6 +154,39 @@ module.exports = NodeHelper.create({
     writeTokens(this.tokens);
     console.log("[VolvoConnect] tokens saved to tokens.json");
   },
+ async _refreshTokens() {
+    if (!this.tokens?.refresh_token) throw new Error("No refresh_token available");
+    const basic = Buffer.from(`${this.cfg.clientId}:${this.cfg.clientSecret}`).toString("base64");
+    const body = new URLSearchParams({
+      grant_type: "refresh_token",
+      refresh_token: this.tokens.refresh_token
+    });
+    const r = await axios.post(VOLVO_AUTH.token, body, {
+      headers: {
+        "content-type": "application/x-www-form-urlencoded",
+        "authorization": `Basic ${basic}`
+      },
+      timeout: 20000
+    });
+    this.tokens = r.data;      // may rotate refresh_token
+    writeTokens(this.tokens);
+    console.log("[VolvoConnect] tokens refreshed");
+  },
+  _debugToken(prefix = "access") {
+  try {
+    const raw = this.tokens?.access_token || "";
+    const [, payloadB64] = raw.split(".");
+    const json = JSON.parse(Buffer.from(payloadB64.replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8"));
+    const scope = json.scope || json.scp || "(no scope)";
+    const aud   = json.aud;
+    const iss   = json.iss;
+    const exp   = json.exp ? new Date(json.exp * 1000).toISOString() : "(no exp)";
+    console.log(`[VolvoConnect] ${prefix} token → iss=${iss} aud=${aud} exp=${exp} scope=${scope}`);
+  } catch (e) {
+    console.log("[VolvoConnect] _debugToken failed to decode JWT payload");
+  }
+},
+  
 
   _api(baseURL) {
     if (!this.tokens?.access_token) throw new Error("Not authenticated");
@@ -169,22 +201,104 @@ module.exports = NodeHelper.create({
     });
   },
 
-  async _fetchVIN() {
-  try {
+    async _fetchVIN() {
+  const doFetch = async () => {
     const api = this._api("https://api.volvocars.com/connected-vehicle/v2");
     const r = await api.get("/vehicles");
     const list = Array.isArray(r.data?.data) ? r.data.data : [];
     if (!list.length) throw new Error("No vehicles found for this account.");
-
     const vin = list[0].vin;
     const model = list[0]?.vehicleModel || list[0]?.description || "Unknown";
-
     this.vin = vin;
     console.log(`[VolvoConnect] VIN detected: ${vin} (${model})`);
     return { vin, model };
+  };
+
+  // quick config sanity
+  if (!this.cfg?.vccApiKey) {
+    console.error("[VolvoConnect] Missing vccApiKey in config.js");
+  }
+  if (!String(this.cfg?.scopes || "").includes("conve:vehicle_relation")) {
+    console.error("[VolvoConnect] scopes should include conve:vehicle_relation");
+  }
+
+  // print token claims once before call
+  this._debugToken("pre-fetch");
+
+  try {
+    return await doFetch();
   } catch (e) {
-    console.error("[VolvoConnect] VIN fetch failed:", e.message);
+    const status = e?.response?.status;
+    const body   = e?.response?.data;
+    if (status === 401) {
+      console.warn("[VolvoConnect] 401 from /vehicles — refreshing token and retrying once…");
+      await this._refreshTokens();
+      this._debugToken("post-refresh");
+      try {
+        return await doFetch();
+      } catch (e2) {
+        const s2 = e2?.response?.status;
+        console.error("[VolvoConnect] /vehicles still failing after refresh:", s2, JSON.stringify(e2?.response?.data||{}, null, 2));
+        throw e2;
+      }
+    }
+    console.error("[VolvoConnect] /vehicles failed:", status, JSON.stringify(body||{}, null, 2));
     throw e;
   }
-}
+},
+async _pollOnce() {
+  if (!this.vin) await this._fetchVIN();
+
+  const apiCV  = this._api("https://api.volvocars.com/connected-vehicle/v2");
+  const apiLOC = this._api("https://api.volvocars.com/location/v1");
+
+  const safe = async (fn) => {
+    try { return await fn(); }
+    catch (e) { return { __error: { status: e?.response?.status, data: e?.response?.data } }; }
+  };
+
+  const [details, odometer, statistics, doors, fuel, engineStatus, windows, tyres, warnings, location] =
+    await Promise.all([
+      safe(() => apiCV.get(`/vehicles/${this.vin}`).then(r=>r.data)),
+      safe(() => apiCV.get(`/vehicles/${this.vin}/odometer`).then(r=>r.data)),
+      safe(() => apiCV.get(`/vehicles/${this.vin}/statistics`).then(r=>r.data)),
+      safe(() => apiCV.get(`/vehicles/${this.vin}/doors`).then(r=>r.data)),
+      safe(() => apiCV.get(`/vehicles/${this.vin}/fuel`).then(r=>r.data)),
+      safe(() => apiCV.get(`/vehicles/${this.vin}/engine-status`).then(r=>r.data)),
+      safe(() => apiCV.get(`/vehicles/${this.vin}/windows`).then(r=>r.data)),
+      safe(() => apiCV.get(`/vehicles/${this.vin}/tyres`).then(r=>r.data)),
+      safe(() => apiCV.get(`/vehicles/${this.vin}/warnings`).then(r=>r.data)),
+      safe(() => apiLOC.get(`/vehicles/${this.vin}/location`).then(r=>r.data))
+    ]);
+
+  this.sendSocketNotification("MYVOLVO_DATA", {
+    meta: { at: new Date().toISOString(), vin: this.vin },
+    data: { details, odometer, statistics, doors, fuel, engineStatus, windows, tyres, warnings, location }
+  });
+},
+_schedulePoll(immediate = false) {
+  if (this.timer) clearInterval(this.timer);
+
+  const run = async () => {
+    try {
+      await this._pollOnce();
+    } catch (e) {
+      const status = e?.response?.status;
+      console.warn("[VolvoConnect] poll error:", status || e.message);
+      if (status === 401) {
+        try {
+          await this._refreshTokens();
+          await this._pollOnce();
+        } catch (e2) {
+          console.error("[VolvoConnect] refresh+retry failed:", e2?.response?.status || e2.message);
+        }
+      }
+    }
+  };
+
+  if (immediate) run();
+  const seconds = Number(this.cfg?.pollSeconds || 300);
+  this.timer = setInterval(run, seconds * 1000);
+  console.log(`[VolvoConnect] polling every ${seconds}s`);
+},
 });
