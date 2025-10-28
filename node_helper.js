@@ -252,29 +252,63 @@ async _pollOnce() {
   const apiCV  = this._api("https://api.volvocars.com/connected-vehicle/v2");
   const apiLOC = this._api("https://api.volvocars.com/location/v1");
 
-  const safe = async (fn) => {
-    try { return await fn(); }
-    catch (e) { return { __error: { status: e?.response?.status, data: e?.response?.data } }; }
-  };
+  const safe = async (fn, label = "unknown") => {
+  try {
+    const result = await fn();
+    if (!result || (result.__error && result.__error.status)) {
+      console.warn(`[VolvoConnect] ${label} returned error:`, JSON.stringify(result, null, 2));
+    }
+    return result;
+  } catch (e) {
+    const status = e?.response?.status;
+    const msg = e?.response?.data?.error || e?.message;
+    console.error(`[VolvoConnect] ${label} failed: ${status || "no status"} → ${msg}`);
+    return { __error: { status, data: e?.response?.data || e.message } };
+  }
+};
 
-  const [details, odometer, statistics, doors, fuel, engineStatus, windows, tyres, warnings, location] =
-    await Promise.all([
-      safe(() => apiCV.get(`/vehicles/${this.vin}`).then(r=>r.data)),
-      safe(() => apiCV.get(`/vehicles/${this.vin}/odometer`).then(r=>r.data)),
-      safe(() => apiCV.get(`/vehicles/${this.vin}/statistics`).then(r=>r.data)),
-      safe(() => apiCV.get(`/vehicles/${this.vin}/doors`).then(r=>r.data)),
-      safe(() => apiCV.get(`/vehicles/${this.vin}/fuel`).then(r=>r.data)),
-      safe(() => apiCV.get(`/vehicles/${this.vin}/engine-status`).then(r=>r.data)),
-      safe(() => apiCV.get(`/vehicles/${this.vin}/windows`).then(r=>r.data)),
-      safe(() => apiCV.get(`/vehicles/${this.vin}/tyres`).then(r=>r.data)),
-      safe(() => apiCV.get(`/vehicles/${this.vin}/warnings`).then(r=>r.data)),
-      safe(() => apiLOC.get(`/vehicles/${this.vin}/location`).then(r=>r.data))
-    ]);
+const [
+  details,
+  odometer,
+  statistics,
+  doors,
+  fuel,
+  engineStatus,
+  windows,
+  tyres,
+  warnings,
+  location,
+  diagnostics
+] = await Promise.all([
+  safe(() => apiCV.get(`/vehicles/${this.vin}`).then(r => r.data), "details"),
+  safe(() => apiCV.get(`/vehicles/${this.vin}/odometer`).then(r => r.data), "odometer"),
+  safe(() => apiCV.get(`/vehicles/${this.vin}/statistics`).then(r => r.data), "statistics"),
+  safe(() => apiCV.get(`/vehicles/${this.vin}/doors`).then(r => r.data), "doors"),
+  safe(() => apiCV.get(`/vehicles/${this.vin}/fuel`).then(r => r.data), "fuel"),
+  safe(() => apiCV.get(`/vehicles/${this.vin}/engine-status`).then(r => r.data), "engine-status"),
+  safe(() => apiCV.get(`/vehicles/${this.vin}/windows`).then(r => r.data), "windows"),
+  safe(() => apiCV.get(`/vehicles/${this.vin}/tyres`).then(r => r.data), "tyres"),
+  safe(() => apiCV.get(`/vehicles/${this.vin}/warnings`).then(r => r.data), "warnings"),
+  safe(() => apiLOC.get(`/vehicles/${this.vin}/location`).then(r => r.data), "location"),
+  safe(() => apiCV.get(`/vehicles/${this.vin}/diagnostics`).then(r => r.data), "diagnostics")
+]);
 
-  this.sendSocketNotification("MYVOLVO_DATA", {
-    meta: { at: new Date().toISOString(), vin: this.vin },
-    data: { details, odometer, statistics, doors, fuel, engineStatus, windows, tyres, warnings, location }
-  });
+this.sendSocketNotification("MYVOLVO_DATA", {
+  meta: { at: new Date().toISOString(), vin: this.vin },
+  data: {
+    details,
+    odometer,
+    statistics,
+    doors,
+    fuel,
+    engineStatus,
+    windows,
+    tyres,
+    warnings,
+    location,
+    diagnostics // ✅ added
+  }
+});
 },
 _schedulePoll(immediate = false) {
   if (this.timer) clearInterval(this.timer);
