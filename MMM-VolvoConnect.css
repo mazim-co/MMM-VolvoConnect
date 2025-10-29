@@ -4,6 +4,11 @@
 /* ===== Root scope ===== */
 .volvo-connect { color: #e8eaec; }
 
+.volvo-connect { --vc-scale: 0.92; }
+.volvo-connect .vc-metrics,
+.volvo-connect .vc-lasttrip,
+.volvo-connect .fuelbar-label { font-size: calc(1rem * var(--vc-scale)); }
+
 /* ===== Card ===== */
 .volvo-connect .main-card {
   background: rgba(45,47,50,0.75);
@@ -124,7 +129,7 @@
   max-height: 115px;              /* keep nominal size */
   object-fit: cover;              /* zoom inside instead of contain */
   object-position: center top;    /* focus on top of car */
-  transform: scale(2.8) translateY(-24px) translateX(-11px);
+  transform: scale(2.6) translateY(-27px) translateX(-11px);
   transform-origin: top center;   /* prevent bottom from overflowing */
 }
 
@@ -137,3 +142,4 @@
   color: #cccccc;
   margin-top: 4px;
 }
+
