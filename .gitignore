@@ -142,3 +142,20 @@ tokens.json
 .DS_Store
 node_modules/
 
+# macOS / system files
+.DS_Store
+*.code-workspace
+*.swp
+
+# Dependencies
+node_modules/
+
+# Local backups & temp files
+*.bak
+*.backup
+*.local.bak.*
+*~
+
+# Tokens and secrets
+tokens.json
+tokens.backup*
